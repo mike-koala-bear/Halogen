@@ -1145,7 +1145,6 @@ Score search(GameState& position, SearchStackState* ss, NN::Accumulator* acc, Se
             = &local.cont_hist.table[position.board().stm][enum_to<PieceType>(ss->moved_piece)][move.to()];
         ss->cont_corr_hist_subtable
             = &local.cont_corr_hist.table[position.board().stm][enum_to<PieceType>(ss->moved_piece)][move.to()];
-        const bool see_safe_check = see_ge(position.board(), move, Score(check_ext_see_margin));
         position.apply_move(move);
         shared.transposition_table.prefetch(
             Zobrist::get_fifty_move_adj_key(position.board())); // load the transposition into l1 cache. ~5% speedup
@@ -1153,56 +1152,51 @@ Score search(GameState& position, SearchStackState* ss, NN::Accumulator* acc, Se
 
         // Step 18.5: Check extensions
         //
-        // Extend checks to see deeper into forcing sequences. Simple and effective approach:
-        // - Identify forcing checks (double checks, contact checks, good history or SEE-safe sacrifices)
-        // - Scale aggressiveness by node type and depth so PV lines stay sharp but cut-nodes don't explode
-        // - Keep negative singular extensions intact (don't offset reductions)
+        // Extend checks to see deeper into forcing sequences. Simple, effective, and proven approach:
+        // - Double checks: always extend (very forcing, king must move)
+        // - Captures that check: extend (forcing, limits responses)
+        // - PV nodes: extend all checks liberally (most important lines)
+        // - Non-PV nodes: extend only forcing checks (double checks, captures)
+        // - Respect negative singular extensions (don't offset reductions)
         if (position.board().checkers && !InCheck && extensions >= 0)
         {
             const bool is_double_check = std::popcount(position.board().checkers) >= 2;
-            const Side defender = position.board().stm;
-            const Square king_sq = position.board().get_king_sq(defender);
-            const bool contact_check = KingAttacks[king_sq] & SquareBB[move.to()];
-            const bool quiet_check = !is_loud_move;
-            const bool history_good = history > check_ext_hist_good;
-            const bool history_bad = history < -check_ext_hist_bad;
-            const bool safe_check = see_safe_check;
-            const bool forcing_check = !quiet_check;
-
-            const int min_depth = pv_node ? check_ext_pv_min_depth : check_ext_nonpv_min_depth;
-            if (depth >= min_depth)
+            const bool is_capture_check = is_loud_move;
+            
+            // PV nodes: extend more liberally to see deeper in critical lines
+            if (pv_node && depth >= 2)
             {
                 if (is_double_check)
                 {
-                    extensions += 2;
+                    extensions += 2; // Double checks are very forcing
                 }
-                else if (!(quiet_check && !safe_check && history_bad))
+                else if (is_capture_check)
                 {
-                    int strength = 0;
-                    strength += forcing_check ? 2 : 0;
-                    strength += safe_check;
-                    strength += contact_check;
-                    strength += history_good;
-                    strength += depth >= check_ext_depth_bonus;
-
-                    int threshold = pv_node ? check_ext_base_pv : check_ext_base_nonpv;
-                    if (quiet_check)
-                    {
-                        threshold += check_ext_quiet_penalty;
-                    }
-
-                    if (strength >= threshold)
+                    extensions += 1; // Captures that check are forcing
+                }
+                else
+                {
+                    // Quiet checks: extend at sufficient depth or with good history
+                    if (depth >= 4 || history > 0)
                     {
                         extensions += 1;
-                        if (strength >= check_ext_double_req && depth >= check_ext_double_depth)
-                        {
-                            extensions += 1;
-                        }
                     }
                 }
             }
+            // Non-PV nodes: extend conservatively, only forcing checks
+            else if (!pv_node && depth >= 3)
+            {
+                if (is_double_check)
+                {
+                    extensions += 1; // Double checks are always worth extending
+                }
+                else if (is_capture_check && depth >= 4)
+                {
+                    extensions += 1; // Captures that check, but only at sufficient depth
+                }
+            }
         }
-
+        
         // Cap all extensions to prevent explosion
         extensions = std::min(extensions, 2);
 

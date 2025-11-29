@@ -146,18 +146,6 @@ TUNEABLE_CONSTANT int probcut_beta = 214;
 TUNEABLE_CONSTANT int probcut_min_depth = 3;
 TUNEABLE_CONSTANT int probcut_depth_const = 5;
 
-TUNEABLE_CONSTANT int check_ext_see_margin = -36;
-TUNEABLE_CONSTANT int check_ext_hist_good = 1903;
-TUNEABLE_CONSTANT int check_ext_hist_bad = 3241;
-TUNEABLE_CONSTANT int check_ext_pv_min_depth = 2;
-TUNEABLE_CONSTANT int check_ext_nonpv_min_depth = 3;
-TUNEABLE_CONSTANT int check_ext_base_pv = 2;
-TUNEABLE_CONSTANT int check_ext_base_nonpv = 3;
-TUNEABLE_CONSTANT int check_ext_quiet_penalty = 1;
-TUNEABLE_CONSTANT int check_ext_depth_bonus = 6;
-TUNEABLE_CONSTANT int check_ext_double_depth = 6;
-TUNEABLE_CONSTANT int check_ext_double_req = 5;
-
 TUNEABLE_CONSTANT int generalized_tt_failhigh_margin = 446;
 TUNEABLE_CONSTANT int generalized_tt_failhigh_depth = 5;
 

@@ -1193,16 +1193,23 @@ Score search(GameState& position, SearchStackState* ss, NN::Accumulator* acc, Se
                 
                 // In PV, allow up to 2 extensions total
                 const int max_pv_extensions = (depth >= 5) ? 2 : 1;
-                if (extensions < max_pv_extensions)
+                // Only add extensions if extensions is non-negative (don't offset negative singular extensions)
+                // and if the sum doesn't exceed the limit
+                if (extensions >= 0)
                 {
-                    extensions += check_extension;
+                    const int remaining_capacity = max_pv_extensions - extensions;
+                    if (remaining_capacity > 0)
+                    {
+                        extensions += std::min(check_extension, remaining_capacity);
+                    }
                 }
             }
             // Non-PV nodes: extend more conservatively
             else if (!cut_node && depth >= 4)
             {
                 // In all-nodes, only extend for double checks or at higher depth
-                if (is_double_check || depth >= 6)
+                // Only extend if extensions is non-negative (don't offset negative singular extensions)
+                if ((is_double_check || depth >= 6) && extensions >= 0)
                 {
                     extensions += 1;
                 }
@@ -1210,12 +1217,16 @@ Score search(GameState& position, SearchStackState* ss, NN::Accumulator* acc, Se
             // Cut nodes: very conservative, only double checks at sufficient depth
             else if (cut_node && depth >= 5 && is_double_check)
             {
-                extensions += 1;
+                // Only extend if extensions is non-negative (don't offset negative singular extensions)
+                if (extensions >= 0)
+                {
+                    extensions += 1;
+                }
             }
-            
-            // Cap total extensions to prevent explosion
-            extensions = std::min(extensions, 2);
         }
+        
+        // Cap total extensions to prevent explosion (applies to all extensions, not just check extensions)
+        extensions = std::min(extensions, 2);
 
         // Step 19: Late move reductions
         int r = late_move_reduction<pv_node>(depth, seen_moves, history, cut_node, improving, is_loud_move);

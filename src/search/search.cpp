@@ -1150,6 +1150,73 @@ Score search(GameState& position, SearchStackState* ss, NN::Accumulator* acc, Se
             Zobrist::get_fifty_move_adj_key(position.board())); // load the transposition into l1 cache. ~5% speedup
         local.net.store_lazy_updates(position.prev_board(), position.board(), *(acc + 1), move);
 
+        // Step 18.5: Check extensions
+        //
+        // If a move gives check to the opponent, we extend the search. This helps the engine
+        // see deeper into forcing check sequences, improving tactical accuracy.
+        // Enhanced implementation with depth-based scaling and broader application:
+        // - Extend in PV nodes more liberally, in cut nodes more conservatively
+        // - Depth-based scaling: more extension at higher depths where it's safer
+        // - Double checks get extra extension (more forcing)
+        // - Track extension depth to prevent infinite loops
+        // - Allow multiple extensions but with diminishing returns
+        if (position.board().checkers && depth >= 2 && !InCheck)
+        {
+            // Count checkers to detect double checks (more forcing)
+            const int checker_count = std::popcount(position.board().checkers);
+            const bool is_double_check = checker_count >= 2;
+            
+            // Calculate maximum allowed extension depth to prevent infinite loops
+            // Limit extensions to prevent search explosion beyond reasonable depth
+            const int max_extension_depth = std::min(distance_from_root + 8, MAX_RECURSION - 2);
+            const bool can_extend_further = distance_from_root < max_extension_depth;
+            
+            if (!can_extend_further)
+            {
+                // Can't extend further, skip
+            }
+            // PV nodes: extend more liberally
+            else if (pv_node)
+            {
+                // Base extension: 1 for single check, 2 for double check
+                int check_extension = is_double_check ? 2 : 1;
+                
+                // Depth-based scaling: extend more at higher depths where it's safer
+                if (depth >= 7)
+                {
+                    check_extension += 1; // Extra extension at high depth
+                }
+                else if (depth <= 3)
+                {
+                    check_extension = 1; // Cap at 1 for low depth
+                }
+                
+                // In PV, allow up to 2 extensions total
+                const int max_pv_extensions = (depth >= 5) ? 2 : 1;
+                if (extensions < max_pv_extensions)
+                {
+                    extensions += check_extension;
+                }
+            }
+            // Non-PV nodes: extend more conservatively
+            else if (!cut_node && depth >= 4)
+            {
+                // In all-nodes, only extend for double checks or at higher depth
+                if (is_double_check || depth >= 6)
+                {
+                    extensions += 1;
+                }
+            }
+            // Cut nodes: very conservative, only double checks at sufficient depth
+            else if (cut_node && depth >= 5 && is_double_check)
+            {
+                extensions += 1;
+            }
+            
+            // Cap total extensions to prevent explosion
+            extensions = std::min(extensions, 2);
+        }
+
         // Step 19: Late move reductions
         int r = late_move_reduction<pv_node>(depth, seen_moves, history, cut_node, improving, is_loud_move);
         Score search_score = search_move<pv_node>(

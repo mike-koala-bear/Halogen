@@ -1145,6 +1145,7 @@ Score search(GameState& position, SearchStackState* ss, NN::Accumulator* acc, Se
             = &local.cont_hist.table[position.board().stm][enum_to<PieceType>(ss->moved_piece)][move.to()];
         ss->cont_corr_hist_subtable
             = &local.cont_corr_hist.table[position.board().stm][enum_to<PieceType>(ss->moved_piece)][move.to()];
+        const bool see_safe_check = see_ge(position.board(), move, Score(check_ext_see_margin));
         position.apply_move(move);
         shared.transposition_table.prefetch(
             Zobrist::get_fifty_move_adj_key(position.board())); // load the transposition into l1 cache. ~5% speedup
@@ -1153,37 +1154,55 @@ Score search(GameState& position, SearchStackState* ss, NN::Accumulator* acc, Se
         // Step 18.5: Check extensions
         //
         // Extend checks to see deeper into forcing sequences. Simple and effective approach:
-        // - PV nodes: extend liberally (most important lines)
-        // - Non-PV nodes: extend conservatively (only double checks or at higher depth)
-        // - Don't extend if already in check (prevents both sides extending)
-        // - Double checks get extra extension (more forcing)
-        // - Respect negative singular extensions (don't offset reductions)
+        // - Identify forcing checks (double checks, contact checks, good history or SEE-safe sacrifices)
+        // - Scale aggressiveness by node type and depth so PV lines stay sharp but cut-nodes don't explode
+        // - Keep negative singular extensions intact (don't offset reductions)
         if (position.board().checkers && !InCheck && extensions >= 0)
         {
             const bool is_double_check = std::popcount(position.board().checkers) >= 2;
-            
-            // PV nodes: extend more liberally
-            if (pv_node && depth >= 2)
+            const Side defender = position.board().stm;
+            const Square king_sq = position.board().get_king_sq(defender);
+            const bool contact_check = KingAttacks[king_sq] & SquareBB[move.to()];
+            const bool quiet_check = !is_loud_move;
+            const bool history_good = history > check_ext_hist_good;
+            const bool history_bad = history < -check_ext_hist_bad;
+            const bool safe_check = see_safe_check;
+            const bool forcing_check = !quiet_check;
+
+            const int min_depth = pv_node ? check_ext_pv_min_depth : check_ext_nonpv_min_depth;
+            if (depth >= min_depth)
             {
-                if (extensions == 0)
+                if (is_double_check)
                 {
-                    extensions += is_double_check ? 2 : 1;
+                    extensions += 2;
                 }
-                else if (extensions == 1 && is_double_check)
+                else if (!(quiet_check && !safe_check && history_bad))
                 {
-                    extensions += 1; // Allow double check to add one more
-                }
-            }
-            // Non-PV nodes: extend conservatively (only double checks or at higher depth)
-            else if (!pv_node && depth >= 4 && (is_double_check || depth >= 6))
-            {
-                if (extensions == 0)
-                {
-                    extensions += 1;
+                    int strength = 0;
+                    strength += forcing_check ? 2 : 0;
+                    strength += safe_check;
+                    strength += contact_check;
+                    strength += history_good;
+                    strength += depth >= check_ext_depth_bonus;
+
+                    int threshold = pv_node ? check_ext_base_pv : check_ext_base_nonpv;
+                    if (quiet_check)
+                    {
+                        threshold += check_ext_quiet_penalty;
+                    }
+
+                    if (strength >= threshold)
+                    {
+                        extensions += 1;
+                        if (strength >= check_ext_double_req && depth >= check_ext_double_depth)
+                        {
+                            extensions += 1;
+                        }
+                    }
                 }
             }
         }
-        
+
         // Cap all extensions to prevent explosion
         extensions = std::min(extensions, 2);
 

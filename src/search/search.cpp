@@ -1150,6 +1150,43 @@ Score search(GameState& position, SearchStackState* ss, NN::Accumulator* acc, Se
             Zobrist::get_fifty_move_adj_key(position.board())); // load the transposition into l1 cache. ~5% speedup
         local.net.store_lazy_updates(position.prev_board(), position.board(), *(acc + 1), move);
 
+        // Step 18.5: Check extensions
+        //
+        // Extend checks to see deeper into forcing sequences. Simple and effective approach:
+        // - PV nodes: extend liberally (most important lines)
+        // - Non-PV nodes: extend conservatively (only double checks or at higher depth)
+        // - Don't extend if already in check (prevents both sides extending)
+        // - Double checks get extra extension (more forcing)
+        // - Respect negative singular extensions (don't offset reductions)
+        if (position.board().checkers && !InCheck && extensions >= 0)
+        {
+            const bool is_double_check = std::popcount(position.board().checkers) >= 2;
+            
+            // PV nodes: extend more liberally
+            if (pv_node && depth >= 2)
+            {
+                if (extensions == 0)
+                {
+                    extensions += is_double_check ? 2 : 1;
+                }
+                else if (extensions == 1 && is_double_check)
+                {
+                    extensions += 1; // Allow double check to add one more
+                }
+            }
+            // Non-PV nodes: extend conservatively (only double checks or at higher depth)
+            else if (!pv_node && depth >= 4 && (is_double_check || depth >= 6))
+            {
+                if (extensions == 0)
+                {
+                    extensions += 1;
+                }
+            }
+        }
+        
+        // Cap all extensions to prevent explosion
+        extensions = std::min(extensions, 2);
+
         // Step 19: Late move reductions
         int r = late_move_reduction<pv_node>(depth, seen_moves, history, cut_node, improving, is_loud_move);
         Score search_score = search_move<pv_node>(
